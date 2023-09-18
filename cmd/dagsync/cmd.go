@@ -121,7 +121,7 @@ type IPTags struct {
 // Declare local global variables
 var pce illumioapi.PCE
 var err error
-var noPrompt, addIPv6, update, insecure, clean, removeOld, changePersistent, noHref bool
+var noPrompt, addIPv6, update, insecure, clean, force, removeOld, changePersistent, noHref bool
 var panURL, panKey, panVsys, filterFile, timeout string
 
 func init() {
@@ -137,6 +137,8 @@ func init() {
 	DAGSyncCmd.Flags().BoolVar(&changePersistent, "non-persistent", false, "RegisterIPs are persistent by default.")
 	DAGSyncCmd.Flags().BoolVarP(&clean, "clean", "c", false, "Remove all Registered IPs from PanOS")
 	DAGSyncCmd.Flags().MarkHidden("clean")
+	DAGSyncCmd.Flags().BoolVarP(&force, "force", "", false, "Including with clean option all registered IPs will be removed.")
+	DAGSyncCmd.Flags().MarkHidden("force")
 	DAGSyncCmd.Flags().BoolVarP(&noHref, "no-href", "", false, "Do not add workload HREF as a tag")
 	DAGSyncCmd.Flags().MarkHidden("no-href")
 	DAGSyncCmd.Flags().SortFlags = false
@@ -436,7 +438,7 @@ func (pan *PAN) UnRegister(listRegisterIP map[string]IPTags) {
 	removeCounter := 0
 	updateCounter := 0
 	for ip, ipTags := range listRegisterIP {
-		if len(ipTags.Labels) == 0 || (clean && ipTags.Found) {
+		if len(ipTags.Labels) == 0 || (clean && ipTags.Found) || (clean && force) {
 			entries = append(entries, Entry{IP: ip}) //, Tag: Tag{Members: labels}
 			utils.LogInfo(fmt.Sprintf("Unregister %s", ip), false)
 			removeCounter++
