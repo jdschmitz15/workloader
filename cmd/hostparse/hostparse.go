@@ -1,135 +1,31 @@
 package hostparse
 
 import (
-	"encoding/csv"
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/brian1917/illumioapi"
+	"github.com/brian1917/illumioapi/v2"
 	"github.com/brian1917/workloader/utils"
 	"github.com/olekukonko/tablewriter"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
-// Set up global variables
-var parserFile, hostFile, appFlag, roleFlag, envFlag, locFlag, outputFileName string
-var debug, noPrompt, updatePCE, allWklds bool
-var capitalize int
-var pce illumioapi.PCE
-var err error
-
-// Init function will handle flags
-func init() {
-	HostnameCmd.Flags().StringVar(&hostFile, "hostfile", "", "Location of optional CSV file with target hostnames parse. Used instead of getting workloads from the PCE.")
-	HostnameCmd.Flags().StringVarP(&roleFlag, "role", "r", "", "Role label to identify workloads to parse hostnames. No value will look for workloads with no role label.")
-	HostnameCmd.Flags().StringVarP(&appFlag, "app", "a", "", "Application label to identify workloads to parse hostnames. No value will look for workloads with no application label.")
-	HostnameCmd.Flags().StringVarP(&envFlag, "env", "e", "", "Environment label to identify workloads to parse hostnames. No value will look for workloads with no environment label.")
-	HostnameCmd.Flags().StringVarP(&locFlag, "loc", "l", "", "Location label to identify workloads to parse hostnames. No value will look for workloads with no location label.")
-	HostnameCmd.Flags().BoolVar(&allWklds, "all", false, "Parse all PCE workloads no matter what labels are assigned. Individual label flags are ignored if set.")
-	HostnameCmd.Flags().IntVar(&capitalize, "capitalize", 1, "Set 1 for uppercase labels(default), 2 for lowercase labels or 0 to leave capitalization as is in parsed hostname.")
-	HostnameCmd.Flags().StringVar(&outputFileName, "output-file", "", "optionally specify the name of the output file location. default is current location with a timestamped filename.")
-
-	HostnameCmd.Flags().SortFlags = false
-
-}
-
-// HostnameCmd runs the hostname parser
-var HostnameCmd = &cobra.Command{
-	Use:   "hostparse [parser file csv]",
-	Short: "Label workloads by parsing hostnames from provided regex functions.",
-	Long: `
-Label workloads by parsing hostnames.
-
-An input CSV specifics the regex functions to use to assign labels. An example is below:
-
-+-----------------------------------------------------+------+------+-----------+-----------+
-|                        REGEX                        | ROLE | APP  |    ENV    | LOC       |
-+-----------------------------------------------------+------+------+-----------+-----------+
-| ([A-Za-z]{3})-([4]).*                               |      | ${1} | CERT      |           |
-| ([A-Za-z]{3})-([7]).*                               |      | ${1} | DEV       |           |
-| ([A-Za-z0-9]*)\.([A-Za-z0-9]*)\.([A-Za-z0-9]*)\.\w+ | ${1} | ${2} |           |           |
-| (h)(3)-(\w*)-([sd])(\d+)                            | APP  | ${3} | SITE${5}  | Amazon    |
-| (h)(6)-(\w*)-([sd])(\d+)                            | DB   | ${3} | SITE${5}  | Amazon    |
-+-----------------------------------------------------+------+------+-----------+-----------+
-
-
-`,
-	Run: func(cmd *cobra.Command, args []string) {
-
-		pce, err = utils.GetTargetPCE(false)
-		if err != nil {
-			utils.LogError(err.Error())
-		}
-
-		// Get persistent flags from Viper
-		debug = viper.Get("debug").(bool)
-		updatePCE = viper.Get("update_pce").(bool)
-		noPrompt = viper.Get("no_prompt").(bool)
-
-		// Get CSV file
-		if len(args) != 1 {
-			fmt.Println("Command requires 1 argument for the csv file. See usage help.")
-			os.Exit(0)
-		}
-		parserFile = args[0]
-
-		hostnameParser()
-	},
-}
-
-// data structure built from the parser.csv
-type regex struct {
-	Regexdata []regexstruct
-}
-
-// regex structure with regex and array of replace regex to build the labels
-type regexstruct struct {
-	regex   string
-	labelcg map[string]string
-}
-
 // ReadCSV - Open CSV for hostfile and parser file
-func ReadCSV(file string) [][]string {
-	csvfile, err := os.Open(file)
-	if err != nil {
-		utils.LogError(err.Error())
-	}
-	defer csvfile.Close()
-
-	if err != nil {
-		utils.LogInfo(fmt.Sprint(err), false)
-		//utils.Logger.Println(err)
-		os.Exit(1)
-	}
-
-	reader := csv.NewReader(csvfile)
-	reader.FieldsPerRecord = -1
-
-	rawCSVdata, err := reader.ReadAll()
-	if err != nil {
-		utils.LogInfo(fmt.Sprint(err), false)
-		os.Exit(1)
-	}
-
-	return rawCSVdata
-}
 
 // RelabelFromHostname function - Regex method to provide labels for the hostname provided
-func (r *regex) RelabelFromHostname(failedPCE bool, wkld illumioapi.Workload, lbls map[string]string, nolabels map[string]string, outputfile *os.File) (bool, illumioapi.Workload) {
+func (r *regex) RelabelFromHostname( /*failedPCE bool,*/ wkld illumioapi.Workload /*lbls map[string]string, */, nolabels map[string]string, outputfile *os.File) (bool, [][]string /*illumioapi.Workload)*/) {
 
 	//var templabels []string
 	var match bool
 	// Copy the workload struct to save to new updated workload struct if needed.
-	var tmpwkld = wkld
+	//var tmpwkld = wkld
 
+	outputCsv := [][]string{}
 	searchname := wkld.Hostname
 
-	if searchname == "" {
+	if searchname == nil {
 		utils.LogInfo(fmt.Sprintf("**** No Hostname string configured on the workload. Name : %s, HRef : %s", wkld.Name, wkld.Href), false)
 	} else {
 		utils.LogInfo(fmt.Sprintf("REGEX Match For - %s", searchname), false)
@@ -141,7 +37,7 @@ func (r *regex) RelabelFromHostname(failedPCE bool, wkld illumioapi.Workload, lb
 		tmpre := regexp.MustCompile(tmp.regex)
 
 		//Is there a match using the regex?
-		match = tmpre.MatchString(searchname)
+		match = tmpre.MatchString(*searchname)
 
 		//Report  if we have a match, regex and replacement regex per label
 		if debug && !match {
@@ -155,42 +51,42 @@ func (r *regex) RelabelFromHostname(failedPCE bool, wkld illumioapi.Workload, lb
 			utils.LogInfo(fmt.Sprintf("%s - Regex: %s - Match: %t", searchname, tmp.regex, match), false)
 			// Save the labels that are existing
 			orgLabels := make(map[string]*illumioapi.Label)
-			for _, l := range *wkld.Labels {
-				orgLabels[l.Key] = l
-			}
+			/*for _, l := range *wkld.Labels {
+				orgLabels[l.Key] = &l
+			}*/
 
-			var tmplabels []*illumioapi.Label
+			var tmplabels []illumioapi.Label
 			for _, label := range []string{"loc", "env", "app", "role"} {
 
 				//get the string returned from the replace regex.
-				tmpstr := changeCase(strings.Trim(tmpre.ReplaceAllString(searchname, tmp.labelcg[label]), " "))
+				tmpstr := changeCase(strings.Trim(tmpre.ReplaceAllString(*searchname, tmp.labelcg[label]), " "))
 
 				var tmplabel illumioapi.Label
 
 				//If regex produced an output add that as the label.
 				if tmpstr != "" {
 
-					//add Key, Value and if available the Href.  Without Href we can skip if user doesnt want to new labels.
+					/*//add Key, Value and if available the Href.  Without Href we can skip if user doesnt want to new labels.
 					if lbls[label+"."+tmpstr] != "" {
 						tmplabel = illumioapi.Label{Href: lbls[label+"."+tmpstr], Key: label, Value: tmpstr}
 					} else {
 
 						//create an entry for the label type and value into the Href map...Href is empty to start
 						lbls[label+"."+tmpstr] = ""
-
-						//create a list of labels that arent currently configured on the PCE that the replacement regex  wants.
-						//only get labels for workloads that have HREFs...
-						if updatePCE || !failedPCE {
-							if tmpwkld.Href != "" {
-								nolabels[label+"."+tmpstr] = ""
-							}
-						} else {
+					*/
+					//create a list of labels that arent currently configured on the PCE that the replacement regex  wants.
+					//only get labels for workloads that have HREFs...
+					/*if updatePCE  || !failedPCE  {
+						if tmpwkld.Href != "" {
 							nolabels[label+"."+tmpstr] = ""
 						}
-						//Build a label variable with Label type and Value but no Href due to the face its not configured on the PCE
-						tmplabel = illumioapi.Label{Key: label, Value: tmpstr}
+					} else {
+						nolabels[label+"."+tmpstr] = ""
+					} */
+					//Build a label variable with Label type and Value but no Href due to the face its not configured on the PCE
+					//tmplabel = illumioapi.Label{Key: label, Value: tmpstr}
 
-					}
+					//}
 
 					// If the regex doesnt produce a replacement or there isnt a replace regex in the CSV then copy orginial label
 				} else {
@@ -203,49 +99,54 @@ func (r *regex) RelabelFromHostname(failedPCE bool, wkld illumioapi.Workload, lb
 					}
 
 				}
-				tmplabels = append(tmplabels, &tmplabel)
+				tmplabels = append(tmplabels, tmplabel)
 				//Add Label array to the workload.
-				tmpwkld.Labels = &tmplabels
+				//tmpwkld.Labels = &tmplabels
 			}
+			/*
+				//Get the original labels and new labels to show the changes.
+				orgRole, orgApp, orgEnv, orgLoc := labelvalues(*wkld.Labels)
+				role, app, env, loc := labelvalues(*tmpwkld.Labels)
 
-			//Get the original labels and new labels to show the changes.
-			orgRole, orgApp, orgEnv, orgLoc := labelvalues(*wkld.Labels)
-			role, app, env, loc := labelvalues(*tmpwkld.Labels)
+				if debug {
+					utils.LogInfo(fmt.Sprintf("%s - Replacement Regex: %+v - Labels: %s - %s - %s - %s", searchname, tmp.labelcg, role, app, env, loc), false)
+				}
+				utils.LogInfo(fmt.Sprintf("%s - Current Labels: %s, %s, %s, %s Replaced with: %s, %s, %s, %s", searchname, orgRole, orgApp, orgEnv, orgLoc, role, app, env, loc), false)
 
-			if debug {
-				utils.LogInfo(fmt.Sprintf("%s - Replacement Regex: %+v - Labels: %s - %s - %s - %s", searchname, tmp.labelcg, role, app, env, loc), false)
-			}
-			utils.LogInfo(fmt.Sprintf("%s - Current Labels: %s, %s, %s, %s Replaced with: %s, %s, %s, %s", searchname, orgRole, orgApp, orgEnv, orgLoc, role, app, env, loc), false)
-
-			// Write out ALL the hostnames with new and old labels in output file
-			fmt.Fprintf(outputfile, "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n", tmpwkld.Hostname, role, app, env, loc, tmpwkld.Href, orgRole, orgApp, orgEnv, orgLoc, tmp.regex, tmp.labelcg)
-			return match, tmpwkld
+				// Write out ALL the hostnames with new and old labels in output file
+				fmt.Fprintf(outputfile, "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n", tmpwkld.Hostname, role, app, env, loc, tmpwkld.Href, orgRole, orgApp, orgEnv, orgLoc, tmp.regex, tmp.labelcg)
+			*/
+			return match, outputCsv //, tmpwkld
 		}
 
 	}
 	utils.LogInfo(fmt.Sprintf("**** NO REGEX MATCH FOUND **** - %s -", searchname), false)
 	//return there was no match for that hostname
-	orgRole, orgApp, orgEnv, orgLoc := labelvalues(*wkld.Labels)
+	/* orgRole, orgApp, orgEnv, orgLoc := labelvalues(*wkld.Labels)
 	role, app, env, loc := "", "", "", ""
 	fmt.Fprintf(outputfile, "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n", tmpwkld.Hostname, role, app, env, loc, tmpwkld.Href, orgRole, orgApp, orgEnv, orgLoc, "", "")
-	return match, tmpwkld
+	*/
+	return match, outputCsv //, tmpwkld
 }
 
-// Load the Regex CSV Into the parser struct -
-func (r *regex) load(data [][]string) {
+// load - Load the Regex CSV Into the parser struct used to for matching and placing labels on the matched workload
+func (r *regex) load(data [][]string, header map[string]int) {
 
 	//Cycle through all the parse data rows in the parse data xls
-	for c, row := range data {
+	for num, row := range data {
 
 		var tmpr regexstruct
 		//ignore header
-		if c != 0 {
+		if num != 0 {
 
 			//Array order 0-Role,1-App,2-Env,3-Loc
 			tmpmap := make(map[string]string)
-			for x, lbl := range []string{"role", "app", "env", "loc"} {
+			for col, colnum := range header {
 				//place CSV column in map
-				tmpmap[lbl] = row[x+1]
+				if col == "regex" {
+					continue
+				}
+				tmpmap[col] = row[colnum]
 			}
 			//Put the regex string and capture groups into data structure
 			tmpr.regex = row[0]
@@ -258,7 +159,7 @@ func (r *regex) load(data [][]string) {
 }
 
 // updatedLabels - Function to update  workload with new labels
-func updateLabels(w *illumioapi.Workload, lblhref map[string]illumioapi.Label) {
+/*func updateLabels(w *illumioapi.Workload, lblhref map[string]illumioapi.Label) {
 
 	var tmplbls []*illumioapi.Label
 	for _, lbl := range *w.Labels {
@@ -267,6 +168,7 @@ func updateLabels(w *illumioapi.Workload, lblhref map[string]illumioapi.Label) {
 	}
 	*w.Labels = tmplbls
 }
+*/
 
 // labelvalues - Return all the Label values from the labels of a workload
 func labelvalues(labels []*illumioapi.Label) (string, string, string, string) {
@@ -289,21 +191,23 @@ func labelvalues(labels []*illumioapi.Label) (string, string, string, string) {
 
 // changeCase - upperorlower function check to see if user set capitalization to ignore/no change(0 default), upper (1) or lower (2)
 func changeCase(str string) string {
-
-	switch capitalize {
-	case 0:
-		return str
-	case 1:
-		return strings.ToUpper(str)
-	case 2:
-		return strings.ToLower(str)
-	default:
-		return str
-	}
+	return str
 }
 
+// 	switch capitalize {
+// 	case 0:
+// 		return str
+// 	case 1:
+// 		return strings.ToUpper(str)
+// 	case 2:
+// 		return strings.ToLower(str)
+// 	default:
+// 		return str
+// 	}
+// }
+
 // hostnameParser - Main function to parse hostnames either on the PCE on in a hostfile using regex file and created labels from results.
-func hostnameParser() {
+func hostnameParser(input Input) {
 
 	// Set output file
 	if outputFileName == "" {
@@ -311,29 +215,17 @@ func hostnameParser() {
 	}
 
 	// Log configuration
-	if debug {
-		name := []string{"update-pce", "no-prompt", "all", "role", "app", "env", "loc", "capitalize", "hostfile", "parsefile"}
-		value := []string{strconv.FormatBool(updatePCE), strconv.FormatBool(noPrompt), strconv.FormatBool(allWklds), roleFlag, appFlag, envFlag, locFlag, strconv.Itoa(capitalize), hostFile, parserFile}
-		for i, n := range name {
-			utils.LogInfo(fmt.Sprintf("%s set to %s ", n, value[i]), false)
-		}
-	}
-
-	//Read the Regex Parsing CSV.   Format should be match Regex and replace regex per label {}
-	var parserec [][]string
-
-	// If no parserFile, log fatal the error. Otherwise, open it.
-	if parserFile == "" {
-		utils.LogError("no Hostname parser file provide - set the parser file location via --parserfile (-p) ")
-	}
-	parserec = ReadCSV(parserFile)
-	if debug {
-		utils.LogDebug(fmt.Sprintf("hostparser - open parser file - %s", parserFile))
-	}
+	// if debug {
+	// 	name := []string{"update-pce", "no-prompt", "all", "role", "app", "env", "loc", "capitalize", "hostfile", "parsefile"}
+	// 	value := []string{strconv.FormatBool(updatePCE), strconv.FormatBool(noPrompt), strconv.FormatBool(allWklds), roleFlag, appFlag, envFlag, locFlag, strconv.Itoa(capitalize), hostFile, parserFile}
+	// 	for i, n := range name {
+	// 		utils.LogInfo(fmt.Sprintf("%s set to %s ", n, value[i]), false)
+	// 	}
+	// }
 
 	var data regex
 	// Load the regex data into the regex struct
-	data.load(parserec)
+	data.load(input.RegexCsv, input.Headers)
 
 	//Make the Workload Output table object for the console
 	matchtable := tablewriter.NewWriter(os.Stdout)
@@ -345,12 +237,33 @@ func hostnameParser() {
 	labeltable.SetAlignment(tablewriter.ALIGN_LEFT)
 	labeltable.SetHeader([]string{"Type", "Value"})
 
-	failedPCE := false
-	//Access PCE to get all Labels only if no_pce is not set to true in config file
-	labels, apiResp, err := pce.GetLabels(nil)
-	if debug {
-		utils.LogAPIResp("GetAllLabels", apiResp)
+	// Get the PCE version
+	version, api, err := input.PCE.GetVersion()
+	utils.LogAPIRespV2("GetVersion", api)
+	if err != nil {
+		utils.LogError(err.Error())
 	}
+
+	// Check if need workloads, labels, and label dimensions
+	var needWklds, needLabels, needLabelDimensions bool
+	if input.PCE.Workloads == nil || len(input.PCE.WorkloadsSlice) == 0 {
+		needWklds = true
+	}
+	if input.PCE.Labels == nil || len(input.PCE.Labels) == 0 {
+		needLabels = true
+	}
+	if (version.Major > 22 || (version.Major == 22 && version.Minor >= 5)) && len(input.PCE.LabelDimensionsSlice) == 0 {
+		needLabelDimensions = true
+	}
+
+	apiResps, err := input.PCE.Load(illumioapi.LoadInput{Workloads: needWklds, Labels: needLabels, LabelDimensions: needLabelDimensions}, utils.UseMulti())
+	utils.LogMultiAPIRespV2(apiResps)
+	if err != nil {
+		utils.LogError(err.Error())
+	}
+	/* failedPCE := false
+	//Access PCE to get all Labels only if no_pce is not set to true in config file
+	apiResp, err := input.PCE.GetLabels(nil)
 	if err != nil {
 		debug = true
 		updatePCE = false
@@ -363,10 +276,7 @@ func hostnameParser() {
 	var workloads []illumioapi.Workload
 
 	if !failedPCE {
-		workloads, apiResp, err = pce.GetWklds(nil)
-		if debug {
-			utils.LogAPIResp("GetAllWorkloads", apiResp)
-		}
+		apiResp, err = input.PCE.GetWklds(nil)
 		if err != nil {
 			utils.LogDebug(fmt.Sprintf("Get All Workloads Error: %s", err))
 			failedPCE = true
@@ -376,16 +286,17 @@ func hostnameParser() {
 	lblskv := make(map[string]string)
 	//Map struct for labels using labe 'href' as the map key.
 	lblshref := make(map[string]illumioapi.Label)
-	for _, l := range labels {
+	for _, l := range input.PCE.Labels {
 		lblskv[l.Key+"."+l.Value] = l.Href
 		lblshref[l.Href] = l
 	}
 
 	//create Label array with all the HRefs as value with label type and label key combined as the key "key.value"
-	if debug && !failedPCE {
+	if debug /* && !failedPCE {
 		utils.LogDebug(fmt.Sprintf("Build Map of HREFs with a key that uses a label's type and value eg. 'type.value': %v", lblskv))
 
 	}
+	*/
 
 	//Create variables for wor
 	var alllabeledwrkld []illumioapi.Workload
@@ -403,28 +314,31 @@ func hostnameParser() {
 
 	var wkld []illumioapi.Workload
 	if hostFile != "" {
-		_, a, err := pce.GetWklds(nil)
+		/*_, a, err := pce.GetWklds(nil)
 		if debug {
 			utils.LogAPIResp("GetWkldHostMap", a)
 		}
 		if err != nil {
 			utils.LogError(err.Error())
+		} */
+		hostrec, err := utils.ParseCSV(hostFile)
+		if err != nil {
+			utils.LogError(err.Error())
 		}
-		hostrec := ReadCSV(hostFile)
 		var tmpwkld illumioapi.Workload
 		for c, row := range hostrec {
 			if c != 0 {
-				w, ok := pce.Workloads[row[0]]
+				w, ok := input.PCE.Workloads[row[0]] //pce.Workloads[row[0]]
 				if ok {
 					tmpwkld = w
 				} else {
-					tmpwkld = illumioapi.Workload{Hostname: row[0]}
+					tmpwkld = illumioapi.Workload{Hostname: &row[0]}
 				}
 				wkld = append(wkld, tmpwkld)
 			}
 		}
 	} else {
-		wkld = workloads
+		wkld = input.PCE.WorkloadsSlice
 	}
 
 	//Cycle through all the workloads
@@ -432,27 +346,28 @@ func hostnameParser() {
 
 		//Check to see
 
-		updateLabels(&w, lblshref)
-		if w.LabelsMatch(roleFlag, appFlag, envFlag, locFlag, lblshref) || allWklds {
+		//updateLabels(&w, input.PCE.Labels)
+		//if w.LabelsMatch(roleFlag, appFlag, envFlag, locFlag, lblshref) || allWklds {
 
-			match, labeledwrkld := data.RelabelFromHostname(failedPCE, w, lblskv, nolabels, outputFile)
-			orgRole, orgApp, orgEnv, orgLoc := labelvalues(*w.Labels)
-			role, app, env, loc := labelvalues(*labeledwrkld.Labels)
+		match, labeledwrkld := data.RelabelFromHostname( /*failedPCE, */ w /*, input.RegexCsv*/, nolabels, outputFile)
+		//orgRole, orgApp, orgEnv, orgLoc := labelvalues(*w.Labels)
+		//role, app, env, loc := labelvalues(*labeledwrkld.Labels)
 
-			if match {
-				if labeledwrkld.Href != "" && !(role == orgRole && app == orgApp && env == orgEnv && loc == orgLoc) {
-					matchtable.Append([]string{labeledwrkld.Hostname, role, app, env, loc, orgRole, orgApp, orgEnv, orgLoc})
-					alllabeledwrkld = append(alllabeledwrkld, labeledwrkld)
-				} else if labeledwrkld.Href == "" && !updatePCE {
-					matchtable.Append([]string{labeledwrkld.Hostname, role, app, env, loc, orgRole, orgApp, orgEnv, orgLoc})
-					utils.LogInfo(fmt.Sprintf("SKIPPING UPDATE - %s - No Workload on the PCE", labeledwrkld.Hostname), false)
-				} else {
-					utils.LogInfo(fmt.Sprintf("SKIPPING UPDATE - %s - No Label Change Required", labeledwrkld.Hostname), false)
+		if match {
+			/*if labeledwrkld.Href != "" && !(role == orgRole && app == orgApp && env == orgEnv && loc == orgLoc) {
+				matchtable.Append([]string{labeledwrkld.Hostname, role, app, env, loc, orgRole, orgApp, orgEnv, orgLoc})
+				alllabeledwrkld = append(alllabeledwrkld, labeledwrkld)
+			} else if labeledwrkld.Href == "" && !updatePCE {
+				matchtable.Append([]string{labeledwrkld.Hostname, role, app, env, loc, orgRole, orgApp, orgEnv, orgLoc})
+				utils.LogInfo(fmt.Sprintf("SKIPPING UPDATE - %s - No Workload on the PCE", labeledwrkld.Hostname), false)
+			} else {
+				utils.LogInfo(fmt.Sprintf("SKIPPING UPDATE - %s - No Label Change Required", labeledwrkld.Hostname), false)
 
-				}
-			}
-
+			}*/
+			fmt.Print(labeledwrkld)
 		}
+
+		//}
 
 	}
 
@@ -482,22 +397,22 @@ func hostnameParser() {
 		}
 		response = "no"
 		//check if noprompt is set to true or you want to update....Skip bulk upload of workload labels.
-		if noPrompt {
-			response = "yes"
-		} else if updatePCE {
-			fmt.Printf("Do you want to update Workloads and potentially create new labels in %s (%s) (yes/no)? ", pce.FriendlyName, viper.Get(pce.FriendlyName+".fqdn").(string))
-			fmt.Scanln(&response)
-		} else {
-			fmt.Println("List of ALL Regex Matched Hostnames even if no Workload exist on the PCE. ")
-		}
+		// if noPrompt {
+		// 	response = "yes"
+		// } else if updatePCE {
+		// 	fmt.Printf("Do you want to update Workloads and potentially create new labels in %s (%s) (yes/no)? ", pce.FriendlyName, viper.Get(pce.FriendlyName+".fqdn").(string))
+		// 	fmt.Scanln(&response)
+		// } else {
+		// 	fmt.Println("List of ALL Regex Matched Hostnames even if no Workload exist on the PCE. ")
+		// }
 
 		//If updating is selected and the NOPCE option has not been invoked then update labels and workloads.
-		if response == "yes" && !failedPCE {
+		if response == "yes" /* && !failedPCE*/ {
 
 			if debug {
 				utils.LogDebug("*********************************LABEL CREATION***************************************")
 			}
-			for _, lbl := range tmplbls {
+			/* for _, lbl := range tmplbls {
 				newLabel, apiResp, err := pce.CreateLabel(lbl)
 
 				if err != nil {
@@ -509,20 +424,20 @@ func hostnameParser() {
 				} else {
 					utils.LogInfo(fmt.Sprintf("CREATED LABEL %s (%s) with following HREF: %s", newLabel.Value, newLabel.Key, newLabel.Href), false)
 				}
-				lblskv[lbl.Key+"."+lbl.Value] = newLabel.Href
-			}
+				 lblskv[lbl.Key+"."+lbl.Value] = newLabel.Href
+			} */
 			if debug {
 				utils.LogDebug("*********************************WORKLOAD BULK UPDATE***************************************")
 			}
 			for _, w := range alllabeledwrkld {
 				for _, l := range *w.Labels {
 					if l.Href == "" {
-						l.Href = lblskv[l.Key+"."+l.Value]
+						/*l.Href = lblskv[l.Key+"."+l.Value] */
 					}
 				}
 			}
 			// Send parsed workloads and new labels to BulkUpdate
-			apiResp, err := pce.BulkWorkload(alllabeledwrkld, "update", true)
+			/* apiResp, err := pce.BulkWorkload(alllabeledwrkld, "update", true)
 
 			//get number of workloads to update
 			utils.LogInfo(fmt.Sprintf("running bulk update on %d workloads. batches run in 1,0000 workload chunks", len(alllabeledwrkld)), false)
@@ -538,18 +453,20 @@ func hostnameParser() {
 				if !debug {
 					utils.LogInfo(fmt.Sprintf("bulkworkload update batch %d completed", i), false)
 				}
-			}
 
+			}
+			*/
 		}
 	} else {
 		//Make sure to put NO MATCHES into output file
 		utils.LogInfo("No Workloads will me updated  -  Check the output file", false)
 
-		if !noPrompt && !failedPCE {
+		/*if !noPrompt && !failedPCE {
 			fmt.Println("***** There were no hostnames that needed updating or matched an entry in the 'parsefile'****")
 		} else if failedPCE {
 			fmt.Println("**** PCE Error **** Cannot update Labels or Hostnames to Upload **** Check Output file ****")
 		}
+		*/
 	}
 
 }
